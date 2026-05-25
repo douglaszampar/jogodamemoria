@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0">
+  <title>Jogo da Memória – 20 Cartas</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      height: 100vh; width: 100vw; overflow: hidden;
+      display: flex; flex-direction: column;
+      user-select: none;
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+    }
+    button {
+      padding: 10px 20px; border: none; border-radius: 20px;
+      font-weight: bold; cursor: pointer; transition: 0.2s;
+      margin: 3px; font-size: 0.9rem; background: rgba(255,255,255,0.25);
+      color: white; backdrop-filter: blur(5px);
+    }
+    button:hover { background: rgba(255,255,255,0.4); transform: scale(1.02); }
+
+    /* Estilos base das cartas */
+    .card {
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center; text-align: center;
+      font-size: clamp(0.55rem, 1.3vw, 0.9rem); font-weight: bold;
+      cursor: pointer; transition: 0.2s; word-break: break-word; padding: 4px;
+      aspect-ratio: 3 / 4;
+      background-size: cover;
+      background-position: center;
+    }
+    .card.matched { opacity: 0.7; cursor: default; filter: brightness(0.9); }
+    .card.flipped, .card.matched {
+      background-image: none !important;
+      color: #fff;
+      border: 2px solid rgba(255,255,255,0.8);
+    }
+    .card:not(.flipped):not(.matched) {
+      color: transparent;
+      border: 2px solid rgba(255,255,255,0.6);
+      /* background-image será definida via variável CSS */
+    }
+
+    /* Cores temáticas para cartas viradas */
+    .theme-oceano .card.flipped,
+    .theme-oceano .card.matched {
+      background: linear-gradient(145deg, #13678a, #0b3d5f);
+    }
+    .theme-floresta .card.flipped,
+    .theme-floresta .card.matched {
+      background: linear-gradient(145deg, #3b6e2b, #1e4a1e);
+    }
+    .theme-galaxia .card.flipped,
+    .theme-galaxia .card.matched {
+      background: linear-gradient(145deg, #4a2e7a, #1d0b3a);
+    }
+
+    #game-screen { display: flex; flex-direction: column; height: 100vh; width: 100vw; }
+    #game-header {
+      flex: 0 0 auto;
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(10px);
+      padding: 6px 16px; display: flex; flex-wrap: wrap;
+      align-items: center; justify-content: space-between;
+      color: white; font-weight: bold; font-size: 0.9rem;
+    }
+    #game-header .scores { display: flex; gap: 15px; }
+    #game-header .player-info { display: flex; gap: 15px; align-items: center; }
+    #feedback { font-size: 0.9rem; padding: 2px 12px; border-radius: 20px; background: rgba(255,255,255,0.2); }
+
+    #board-container {
+      flex: 1 1 auto;
+      display: flex; align-items: center; justify-content: center;
+      padding: 5px; overflow: hidden;
+    }
+    #gameBoard {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      grid-template-rows: repeat(4, 1fr);
+      gap: 6px;
+      width: 100%; height: 100%;
+    }
+
+    .setup-screen { height: 100vh; overflow-y: auto; padding: 20px; display: flex; align-items: center; justify-content: center; }
+    .setup-panel { max-width: 700px; background: rgba(0,0,0,0.5); backdrop-filter: blur(15px); padding: 25px; border-radius: 20px; color: white; }
+    .group-row { margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 12px; }
+    input, textarea, select { padding: 8px; border-radius: 8px; border: none; margin: 4px; }
+    textarea { width: 100%; }
+    h2 { margin-bottom: 10px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body id="main-body" class="theme-oceano">
+  <div id="app-root" style="height:100vh; width:100vw;"></div>
+
+  <script>
+    (function() {
+      // ================= CONFIGURAÇÃO DAS IMAGENS =================
+      // Altere os caminhos conforme a estrutura do seu GitHub
+      const THEME_IMAGES = {
+        oceano:   { bg: 'ocean.jpg',     card: 'oceancard.jpg' },
+        floresta: { bg: 'floresta.jpg',  card: 'florestacard.jpg' },
+        galaxia:  { bg: 'galaxia.jpg',   card: 'galaxiacard.jpg' }
+      };
+      // =============================================================
+
+      const THEMES = ['oceano', 'floresta', 'galaxia'];
+      const MIN_QUESTIONS = 10;
+      const MAX_PAIRS = 10;
+
+      let parsedQuestions = [];
+      let groups = [];
+      let tournamentMatches = [];
+      let styleOrder = [];
+      let currentMatchIndex = 0;
+      let currentMatchState = null;
+
+      function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+
+      function parseTxt(text) {
+        const lines = text.split(/\r?\n/);
+        let startIndex = -1;
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].match(/Peso\s+\d+/i)) { startIndex = i + 1; break; }
+        }
+        if (startIndex === -1) throw new Error('Linha com "Peso X" não encontrada.');
+        const questions = [];
+        for (let i = startIndex; i < lines.length; i++) {
+          let line = lines[i].trim();
+          if (!line) continue;
+          line = line.replace(/^\(\+\d+s\)\s*/, '');
+          line = line.replace(/\|\|\s*Peso\s+\d+\s*$/, '').trim();
+          const parts = line.split(';');
+          if (parts.length < 2) continue;
+          const questionRaw = parts[0].trim();
+          const answersRaw = parts.slice(1).join(';').trim();
+          const answers = answersRaw.split(',').map(s => s.trim()).filter(s => s);
+          let questionHTML = questionRaw
+            .replace(/<b>/g, '<b>').replace(/<\/b>/g, '</b>')
+            .replace(/ <br>/g, '<br>').replace(/<br>/g, '<br>');
+          questionHTML = questionHTML.replace(/_+/g, '<span class="gap">______</span>');
+          questions.push({ id: questions.length, questionHTML, answers: answers.map(a => a.toLowerCase()), firstAnswer: answers[0] || '' });
+        }
+        return questions;
+      }
+
+      const root = document.getElementById('app-root');
+      const body = document.getElementById('main-body');
+
+      function setTheme(themeName) {
+        body.className = `theme-${themeName}`;
+        const imgs = THEME_IMAGES[themeName] || THEME_IMAGES['oceano'];
+        document.documentElement.style.setProperty('--bg-image', `url(${imgs.bg})`);
+        document.documentElement.style.setProperty('--card-back', `url(${imgs.card})`);
+      }
+
+      function showUploadScreen() {
+        root.innerHTML = `
+          <div class="setup-screen"><div class="setup-panel">
+            <h2>📁 Envie o arquivo de perguntas</h2>
+            <p>O arquivo deve conter <b>no mínimo 10 perguntas</b> para formar 20 cartas.</p>
+            <input type="file" id="fileInput" accept=".txt" style="display:block; margin:15px 0;"/>
+          </div></div>`;
+        document.getElementById('fileInput').addEventListener('change', handleFileUpload);
+      }
+
+      function handleFileUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+          try {
+            parsedQuestions = parseTxt(ev.target.result);
+            if (parsedQuestions.length < MIN_QUESTIONS) {
+              alert(`O arquivo contém apenas ${parsedQuestions.length} pergunta(s). São necessárias pelo menos ${MIN_QUESTIONS} para gerar 20 cartas.`);
+              return;
+            }
+            showGroupSetup();
+          } catch (err) { alert('Erro: ' + err.message); }
+        };
+        reader.readAsText(file);
+      }
+
+      function showGroupSetup() {
+        let html = `<div class="setup-screen"><div class="setup-panel"><h2>👥 Grupos</h2>`;
+        html += `<label>Quantos grupos (2-6): <input type="number" id="numGroups" min="2" max="6" value="2"></label>`;
+        html += `<button id="createGroupsBtn">Criar</button><div id="groupsContainer"></div>`;
+        html += `<button id="toVotingBtn">Avançar para votação</button></div></div>`;
+        root.innerHTML = html;
+        document.getElementById('createGroupsBtn').addEventListener('click', () => {
+          const num = parseInt(document.getElementById('numGroups').value);
+          if (num < 2 || num > 6) { alert('Inválido'); return; }
+          renderGroupFields(num);
+        });
+        document.getElementById('toVotingBtn').addEventListener('click', collectGroupsAndGoToVoting);
+        renderGroupFields(2);
+      }
+
+      function renderGroupFields(num) {
+        const container = document.getElementById('groupsContainer');
+        container.innerHTML = '';
+        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        for (let i = 0; i < num; i++) {
+          const defaultGroupName = `Grupo ${letters[i] || (i+1)}`;
+          container.innerHTML += `
+            <div class="group-row">
+              <label>Nome: <input type="text" class="groupName" value="${defaultGroupName}"></label><br>
+              <label>Alunos (um por linha): <textarea class="groupStudents" rows="3">Aluno 1</textarea></label>
+            </div>`;
+        }
+      }
+
+      function collectGroupsAndGoToVoting() {
+        const groupNames = document.querySelectorAll('.groupName');
+        const groupStudents = document.querySelectorAll('.groupStudents');
+        groups = [];
+        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        for (let i = 0; i < groupNames.length; i++) {
+          let name = groupNames[i].value.trim();
+          if (!name) name = `Grupo ${letters[i] || (i+1)}`;
+          let studentsText = groupStudents[i].value.trim();
+          if (!studentsText) studentsText = 'Aluno 1';
+          const students = studentsText.split('\n').map(s => s.trim()).filter(s => s);
+          if (students.length === 0) students.push('Aluno 1');
+          groups.push({ name, students });
+        }
+        showStyleVoting();
+      }
+
+      function showStyleVoting() {
+        let html = `<div class="setup-screen"><div class="setup-panel"><h2>🎨 Votação de estilo</h2>`;
+        groups.forEach((g, idx) => {
+          html += `<div class="group-row"><strong>${g.name}</strong>: 
+            <select class="styleVote" data-group="${idx}">
+              <option value="oceano">🌊 Oceano</option>
+              <option value="floresta">🌿 Floresta</option>
+              <option value="galaxia">🌌 Galáxia</option>
+            </select></div>`;
+        });
+        html += `<button id="startTournamentBtn">Iniciar Campeonato</button></div></div>`;
+        root.innerHTML = html;
+        document.getElementById('startTournamentBtn').addEventListener('click', finalizeVotesAndBuildTournament);
+      }
+
+      function finalizeVotesAndBuildTournament() {
+        const selects = document.querySelectorAll('.styleVote');
+        const votes = {};
+        selects.forEach(sel => { votes[sel.value] = (votes[sel.value] || 0) + 1; });
+        const themesWithVotes = Object.entries(votes).filter(([_, v]) => v > 0);
+        themesWithVotes.sort((a, b) => b[1] - a[1] || Math.random() - 0.5);
+        styleOrder = themesWithVotes.map(([theme]) => theme);
+        if (styleOrder.length === 0) styleOrder = ['oceano'];
+        buildTournament();
+        showTournamentBracket();
+      }
+
+      function buildTournament() {
+        const n = groups.length;
+        tournamentMatches = [];
+        if (n <= 3) tournamentMatches.push({ matchId: 0, groupIds: groups.map((_, i) => i), winnerGroupId: null });
+        else if (n === 4) {
+          tournamentMatches.push({ matchId: 0, groupIds: [0, 1], winnerGroupId: null });
+          tournamentMatches.push({ matchId: 1, groupIds: [2, 3], winnerGroupId: null });
+          tournamentMatches.push({ matchId: 2, groupIds: [], winnerGroupId: null });
+        } else if (n === 5) {
+          const sh = shuffle([...Array(n).keys()]);
+          tournamentMatches.push({ matchId: 0, groupIds: sh.slice(0,3), winnerGroupId: null });
+          tournamentMatches.push({ matchId: 1, groupIds: sh.slice(3,5), winnerGroupId: null });
+          tournamentMatches.push({ matchId: 2, groupIds: [], winnerGroupId: null });
+        } else if (n === 6) {
+          tournamentMatches.push({ matchId: 0, groupIds: [0,1,2], winnerGroupId: null });
+          tournamentMatches.push({ matchId: 1, groupIds: [3,4,5], winnerGroupId: null });
+          tournamentMatches.push({ matchId: 2, groupIds: [], winnerGroupId: null });
+        }
+      }
+
+      function showTournamentBracket() {
+        let html = `<div class="setup-screen"><div class="setup-panel"><h2>🏆 Campeonato</h2>`;
+        tournamentMatches.forEach((m, idx) => {
+          const names = m.groupIds.length ? m.groupIds.map(i => groups[i].name).join(' vs ') : 'Final';
+          html += `<p><strong>Partida ${idx+1}:</strong> ${names}</p>`;
+        });
+        html += `<p>Tema 1ª partida: <strong>${styleOrder[0] || 'padrão'}</strong></p>`;
+        html += `<button id="playMatchBtn">Jogar</button></div></div>`;
+        root.innerHTML = html;
+        document.getElementById('playMatchBtn').addEventListener('click', () => { currentMatchIndex = 0; startMatch(0); });
+      }
+
+      function startMatch(matchIdx) {
+        const match = tournamentMatches[matchIdx];
+        if (!match.groupIds.length) {
+          const prev = tournamentMatches.filter(m => m.winnerGroupId !== null);
+          match.groupIds = prev.slice(0,2).map(m => m.winnerGroupId);
+        }
+        const playingGroups = match.groupIds.map(gid => groups[gid]);
+
+        const selectedQuestions = shuffle([...parsedQuestions]).slice(0, MAX_PAIRS);
+        const boardCards = [];
+        selectedQuestions.forEach(q => {
+          boardCards.push({ type: 'question', pairId: q.id, content: q.questionHTML, answers: q.answers, display: '' });
+          boardCards.push({ type: 'answer', pairId: q.id, content: '', answers: q.answers, display: q.firstAnswer });
+        });
+        shuffle(boardCards);
+
+        const maxStudents = Math.max(...playingGroups.map(g => g.students.length));
+        const players = [];
+        for (let r = 0; r < maxStudents; r++) {
+          for (let gIdx = 0; gIdx < playingGroups.length; gIdx++) {
+            const student = playingGroups[gIdx].students[r];
+            if (student) players.push({ groupId: match.groupIds[gIdx], groupName: playingGroups[gIdx].name, studentName: student, failuresLeft: 3 });
+          }
+        }
+        currentMatchState = {
+          matchId: matchIdx, groupIds: match.groupIds, players,
+          currentPlayerIndex: 0, boardCards, flippedCards: [], waiting: false,
+          matchFinished: false, scores: Object.fromEntries(match.groupIds.map(id => [id, 0]))
+        };
+        const theme = styleOrder[matchIdx % styleOrder.length] || 'oceano';
+        setTheme(theme);
+        renderGameScreen();
+      }
+
+      function renderGameScreen() {
+        const state = currentMatchState;
+        if (!state || state.matchFinished) return;
+        const currentPlayer = state.players[state.currentPlayerIndex];
+
+        root.innerHTML = `
+          <div id="game-screen">
+            <div id="game-header">
+              <div class="scores">${Object.entries(state.scores).map(([gid, sc]) => `<span>${groups[gid].name}: ${sc}</span>`).join('')}</div>
+              <div class="player-info">
+                <span>🎯 ${currentPlayer.studentName} (${currentPlayer.groupName})</span>
+                <span>❤️ ${currentPlayer.failuresLeft}</span>
+                <span id="feedback"></span>
+              </div>
+            </div>
+            <div id="board-container">
+              <div id="gameBoard"></div>
+            </div>
+          </div>`;
+
+        const boardDiv = document.getElementById('gameBoard');
+        boardDiv.innerHTML = '';
+        state.boardCards.forEach((card, idx) => {
+          const cardDiv = document.createElement('div');
+          cardDiv.className = 'card';
+          cardDiv.dataset.index = idx;
+          if (card.matched) cardDiv.classList.add('matched');
+          if (card.flipped) cardDiv.classList.add('flipped');
+          cardDiv.addEventListener('click', () => onCardClick(idx));
+          boardDiv.appendChild(cardDiv);
+        });
+        updateBoardVisual();
+      }
+
+      function updateBoardVisual() {
+        const state = currentMatchState;
+        const cards = document.querySelectorAll('.card');
+        cards.forEach((cardDiv, idx) => {
+          const card = state.boardCards[idx];
+          cardDiv.classList.toggle('flipped', card.flipped);
+          cardDiv.classList.toggle('matched', card.matched);
+          if (card.flipped || card.matched) {
+            cardDiv.innerHTML = card.type === 'question' ? card.content : `<b>${card.display}</b>`;
+            cardDiv.style.backgroundImage = '';
+          } else {
+            cardDiv.innerHTML = '?';
+            cardDiv.style.backgroundImage = 'var(--card-back)';
+          }
+        });
+      }
+
+      function onCardClick(index) {
+        const state = currentMatchState;
+        if (state.waiting || state.matchFinished) return;
+        const card = state.boardCards[index];
+        if (card.flipped || card.matched) return;
+        card.flipped = true;
+        updateBoardVisual();
+        state.flippedCards.push(index);
+
+        if (state.flippedCards.length === 2) {
+          state.waiting = true;
+          const [i1, i2] = state.flippedCards;
+          const c1 = state.boardCards[i1], c2 = state.boardCards[i2];
+          const isMatch = checkMatch(c1, c2);
+          const feedbackEl = document.getElementById('feedback');
+          if (isMatch) {
+            c1.matched = c2.matched = true;
+            state.scores[currentPlayerGroupId()] += 1;
+            updateBoardVisual();
+            state.flippedCards = [];
+            state.waiting = false;
+            if (feedbackEl) feedbackEl.textContent = '✅ Par encontrado!';
+            checkGameOver();
+          } else {
+            if (feedbackEl) feedbackEl.textContent = '❌ Errado...';
+            setTimeout(() => {
+              c1.flipped = c2.flipped = false;
+              updateBoardVisual();
+              state.flippedCards = [];
+              state.waiting = false;
+              const player = state.players[state.currentPlayerIndex];
+              player.failuresLeft--;
+              if (feedbackEl) feedbackEl.textContent = '';
+              if (player.failuresLeft <= 0) {
+                advanceToNextPlayer();
+              } else {
+                renderGameScreen();
+              }
+              checkGameOver();
+            }, 900);
+          }
+        }
+      }
+
+      function checkMatch(c1, c2) {
+        if (c1.type === c2.type) return false;
+        const qCard = c1.type === 'question' ? c1 : c2;
+        const aCard = c1.type === 'answer' ? c1 : c2;
+        return qCard.pairId === aCard.pairId && qCard.answers.includes(aCard.display.toLowerCase());
+      }
+
+      function currentPlayerGroupId() {
+        return currentMatchState.players[currentMatchState.currentPlayerIndex].groupId;
+      }
+
+      function advanceToNextPlayer() {
+        const state = currentMatchState;
+        let next = (state.currentPlayerIndex + 1) % state.players.length;
+        let tries = 0;
+        while (state.players[next].failuresLeft <= 0 && tries < state.players.length) {
+          next = (next + 1) % state.players.length;
+          tries++;
+        }
+        if (tries === state.players.length) {
+          state.matchFinished = true;
+          renderGameOverScreen();
+          return;
+        }
+        state.currentPlayerIndex = next;
+        renderGameScreen();
+      }
+
+      function checkGameOver() {
+        const state = currentMatchState;
+        if (state.boardCards.every(c => c.matched)) {
+          state.matchFinished = true;
+          renderGameOverScreen();
+        }
+      }
+
+      function renderGameOverScreen() {
+        const state = currentMatchState;
+        if (!state) return;
+        const winner = Object.entries(state.scores).sort((a,b) => b[1]-a[1] || Math.random()-0.5)[0][0];
+        tournamentMatches[state.matchId].winnerGroupId = parseInt(winner);
+        let html = `<div class="setup-screen"><div class="setup-panel"><h2>🏁 Partida encerrada!</h2>`;
+        html += `<ul>${Object.entries(state.scores).map(([gid,sc]) => `<li>${groups[gid].name}: ${sc} pares</li>`).join('')}</ul>`;
+        html += `<p>🏆 Vencedor: <strong>${groups[winner].name}</strong></p>`;
+        const next = state.matchId + 1;
+        if (next < tournamentMatches.length) {
+          html += `<button id="nextMatchBtn">Próxima partida</button>`;
+        } else {
+          html += `<h3>🎉 Campeonato concluído! Campeão: ${groups[winner].name}</h3>`;
+          html += `<button onclick="location.reload()">Jogar novamente</button>`;
+        }
+        root.innerHTML = html;
+        if (next < tournamentMatches.length) {
+          document.getElementById('nextMatchBtn').addEventListener('click', () => { currentMatchIndex = next; startMatch(next); });
+        }
+        currentMatchState = null;
+      }
+
+      // Inicializa o primeiro tema (apenas visual, será sobrescrito na partida)
+      setTheme('oceano');
+      showUploadScreen();
+    })();
+  </script>
+</body>
+</html>
